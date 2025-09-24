@@ -1,9 +1,9 @@
 ﻿using Dapper;
 using Microsoft.Extensions.Logging;
 using System.Threading.Tasks;
-using CoreHRAPI.Models.User;
+using KYCAPI.Models.User;
 
-namespace CoreHRAPI.Data
+namespace KYCAPI.Data
 {
     public class UserCredentialsRepository
     {
@@ -14,15 +14,15 @@ namespace CoreHRAPI.Data
         {
             public const string GetUserByCodedUsername = @"
                 SELECT 
-                    userid,
-                    codedid,
-                    codedusername,
-                    codedpword,
+                    user_id as userid,
+                    coded_id as codedid,
+                    coded_username as codedusername,
+                    coded_password as codedpword,
                     status
-                FROM core.main_user_creds 
-                WHERE codedusername = @CodedUsername";
+                FROM dbo.sys_user_credentials 
+                WHERE coded_username = @CodedUsername";
 
-            public const string CheckUserIfActive = @"SELECT u.status AS is_user_active, up.userid, up.email_address FROM core.main_user_primary_details u JOIN core.main_user_contact_details up ON up.userid = u.userid WHERE up.email_address = @Email";
+            public const string CheckUserIfActive = @"SELECT is_active AS is_user_active, userid, email FROM dbo.sys_users WHERE email = @Email";
         }
 
         public UserCredentialsRepository(ILogger<UserCredentialsRepository> logger, DatabaseContext dbContext)

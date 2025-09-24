@@ -1,7 +1,7 @@
 ﻿using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
-namespace CoreHRAPI.Models.User
+namespace KYCAPI.Models.User
 {
     public class UserPositionDto
     {

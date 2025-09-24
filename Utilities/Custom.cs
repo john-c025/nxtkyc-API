@@ -1,6 +1,6 @@
 ﻿using System.Security.Cryptography;
 
-namespace CoreHRAPI.Utilities
+namespace KYCAPI.Utilities
 {
     public class Custom
     {

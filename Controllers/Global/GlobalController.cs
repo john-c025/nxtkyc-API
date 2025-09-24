@@ -1,26 +1,25 @@
 ﻿using System.Text.Json;
-using CoreHRAPI.Controllers.Dashboard;
-using CoreHRAPI.Data;
-using CoreHRAPI.Models.Configuration;
-using CoreHRAPI.Models.Global;
-using CoreHRAPI.Models.User;
-using CoreHRAPI.Utilities;
+using KYCAPI.Data;
+using KYCAPI.Models.Configuration;
+using KYCAPI.Models.Global;
+using KYCAPI.Models.User;
+using KYCAPI.Utilities;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
 
-namespace CoreHRAPI.Controllers.Global
+namespace KYCAPI.Controllers.Global
 {
     [ApiController]
     [Route("api/v1/global")]
     public class GlobalController : ControllerBase
     {
-        private readonly ILogger<UserDetailsController> _logger;
+        private readonly ILogger<GlobalController> _logger;
         private readonly GlobalRepository _globalRepository;
         private readonly EmailService _emailService;
-        public GlobalController(ILogger<UserDetailsController> logger, EmailService emailService, GlobalRepository globalRepository)
+        public GlobalController(ILogger<GlobalController> logger, EmailService emailService, GlobalRepository globalRepository)
         {
             _logger = logger;
             _globalRepository = globalRepository;

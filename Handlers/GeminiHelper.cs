@@ -2,7 +2,7 @@
 using Newtonsoft.Json;
 using System.Text;
 
-namespace CoreHRAPI.Handlers
+namespace KYCAPI.Handlers
 {
     public class GeminiHelper
     {

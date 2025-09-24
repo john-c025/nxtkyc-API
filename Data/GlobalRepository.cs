@@ -3,14 +3,13 @@ using System.Data;
 using System.Text;
 using System.Threading.Tasks;
 using Dapper;
-using CoreHRAPI.Models.Global;
-using CoreHRAPI.Models.User;
+using KYCAPI.Models.Global;
+using KYCAPI.Models.User;
 using Newtonsoft.Json;
 using System.Text.Json;
 
-using static CoreHRAPI.Models.Reports.ReportsModel;
 
-namespace CoreHRAPI.Data
+namespace KYCAPI.Data
 {
     public class GlobalRepository
     {
@@ -655,21 +654,6 @@ namespace CoreHRAPI.Data
             });
         }
 
-        public async Task<int> LogManualEmployeeAddAsync(string userid, long employeeId, EmployeeHRDetailsCreateModel employee)
-        {
-            return await _dbContext.ExecuteDapperAsync(async connection =>
-            {
-                return await InsertAuditTrailAsync(
-                    connection,
-                    tableName: "main_employee_hr_details",
-                    recordId: employeeId,
-                    action: "MANUAL EMPLOYEE ADD",
-                    userid: userid,
-                    newData: employee,
-                    remarks: "Manual employee addition via API"
-                );
-            });
-        }
 
 
 

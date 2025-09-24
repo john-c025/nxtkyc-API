@@ -1,15 +1,15 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using System.Threading.Tasks;
-using CoreHRAPI.Models.Auth;
+using KYCAPI.Models.Auth;
 using System.Security.Cryptography;
 using System.Text;
-using CoreHRAPI.Data;
+using KYCAPI.Data;
 using Microsoft.IdentityModel.Tokens;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
-using CoreHRAPI.Models.User;
+using KYCAPI.Models.User;
 
-namespace CoreHRAPI.Controllers
+namespace KYCAPI.Controllers
 {
     [ApiController]
     [Route("api/v1/auth")]
@@ -208,6 +208,68 @@ namespace CoreHRAPI.Controllers
             return Ok(new { Message = "Successfully logged out", Code = 200 });
         }
 
+        [HttpPost("generate-bcrypt")]
+        public IActionResult GenerateBcryptPassword([FromBody] string plainText)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(plainText))
+                {
+                    return BadRequest(new { Message = "Plain text password is required", Code = 400 });
+                }
+
+                // Generate BCrypt hash
+                string bcryptHash = BCrypt.Net.BCrypt.HashPassword(plainText);
+
+                return Ok(new
+                {
+                    Message = "BCrypt password generated successfully",
+                    Code = 200,
+                    Data = new
+                    {
+                        PlainText = plainText,
+                        BcryptHash = bcryptHash
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error generating BCrypt password");
+                return StatusCode(500, new { Message = "Error generating BCrypt password", Error = ex.Message, Code = 500 });
+            }
+        }
+
+        [HttpPost("verify-bcrypt")]
+        public IActionResult VerifyBcryptPassword([FromBody] VerifyBcryptRequest request)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(request.PlainText) || string.IsNullOrEmpty(request.BcryptHash))
+                {
+                    return BadRequest(new { Message = "Plain text password and BCrypt hash are required", Code = 400 });
+                }
+
+                bool isValid = BCrypt.Net.BCrypt.Verify(request.PlainText, request.BcryptHash);
+
+                return Ok(new
+                {
+                    Message = isValid ? "Password verification successful" : "Password verification failed",
+                    Code = 200,
+                    Data = new
+                    {
+                        PlainText = request.PlainText,
+                        BcryptHash = request.BcryptHash,
+                        IsValid = isValid
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error verifying BCrypt password");
+                return StatusCode(500, new { Message = "Error verifying BCrypt password", Error = ex.Message, Code = 500 });
+            }
+        }
+
         //[HttpPost("forgot-password")]
         //public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordDto forgotPasswordDto)
         //{
@@ -279,6 +341,73 @@ namespace CoreHRAPI.Controllers
                 return StatusCode(500, new
                 {
                     Message = "Failed to check user status",
+                    Status = 500,
+                    Data = ex.Message
+                });
+            }
+        }
+
+        [HttpGet("debug-user-credentials")]
+        public async Task<IActionResult> DebugUserCredentials([FromQuery] string username)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(username))
+                {
+                    return BadRequest(new
+                    {
+                        Message = "Username is required",
+                        Status = 400,
+                        Data = (object)null
+                    });
+                }
+
+                // Generate MD5 hash for username
+                string md5Username = GetMd5HashAscii(username);
+                
+                // Get user credentials from database
+                var user = await _userCredentialsRepository.GetUserByCodedUsernameAsync(md5Username);
+
+                if (user == null)
+                {
+                    return NotFound(new
+                    {
+                        Message = "User not found",
+                        Status = 404,
+                        Data = new 
+                        { 
+                            Username = username,
+                            Md5Username = md5Username,
+                            Message = "No user found with this MD5 username hash"
+                        }
+                    });
+                }
+
+                return Ok(new
+                {
+                    Message = "User credentials retrieved successfully",
+                    Status = 200,
+                    Data = new
+                    {
+                        OriginalUsername = username,
+                        Md5Username = md5Username,
+                        UserId = user.userid,
+                        CodedId = user.codedid,
+                        CodedUsername = user.codedusername,
+                        HasPassword = !string.IsNullOrEmpty(user.codedpword),
+                        PasswordLength = user.codedpword?.Length ?? 0,
+                        Status = user.status,
+                        PasswordPreview = user.codedpword?.Substring(0, Math.Min(20, user.codedpword.Length)) + "..." // Show first 20 chars
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error debugging user credentials for username: {Username}", username);
+
+                return StatusCode(500, new
+                {
+                    Message = "Failed to debug user credentials",
                     Status = 500,
                     Data = ex.Message
                 });

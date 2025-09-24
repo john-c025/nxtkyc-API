@@ -1,4 +1,4 @@
-﻿namespace CoreHRAPI.Models.Configuration
+﻿namespace KYCAPI.Models.Configuration
 {
     public class APIResponse<T>
     {
@@ -22,6 +22,34 @@
             {
                 code = code,
                 message = message,
+                Data = data
+            };
+        }
+    }
+
+    // Non-generic APIResponse for KYC controllers
+    public class APIResponse
+    {
+        public bool Success { get; set; }
+        public string Message { get; set; }
+        public object? Data { get; set; }
+
+        public static APIResponse CreateSuccess(string message = "Success", object? data = null)
+        {
+            return new APIResponse
+            {
+                Success = true,
+                Message = message,
+                Data = data
+            };
+        }
+
+        public static APIResponse CreateFailure(string message = "Failed", object? data = null)
+        {
+            return new APIResponse
+            {
+                Success = false,
+                Message = message,
                 Data = data
             };
         }

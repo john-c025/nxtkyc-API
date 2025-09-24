@@ -2,7 +2,7 @@
 using Newtonsoft.Json;
 
 
-namespace CoreHRAPI.Helpers
+namespace KYCAPI.Helpers
     {
         public static class SessionExtensions
         {

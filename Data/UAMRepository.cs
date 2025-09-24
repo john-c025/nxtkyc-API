@@ -4,12 +4,12 @@ using System.Data;
 using System.Linq;
 using System.Threading.Tasks;
 using Dapper;
-using CoreHRAPI.Models.Global;
-using CoreHRAPI.Models.User;
+using KYCAPI.Models.Global;
+using KYCAPI.Models.User;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 
-namespace CoreHRAPI.Data
+namespace KYCAPI.Data
 {
     public class UAMRepository
     {
@@ -171,6 +171,8 @@ namespace CoreHRAPI.Data
                     parameters,
                     commandType: CommandType.Text
                 );
+
+
 
                 if (result == null)
                     throw new Exception("Failed to register user");

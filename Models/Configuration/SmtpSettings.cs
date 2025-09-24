@@ -1,4 +1,4 @@
-﻿namespace CoreHRAPI.Models.Configuration
+﻿namespace KYCAPI.Models.Configuration
 {
     public class SmtpSettings
     {

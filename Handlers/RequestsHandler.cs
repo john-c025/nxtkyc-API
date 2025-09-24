@@ -1,9 +1,9 @@
 ﻿using Newtonsoft.Json.Linq;
 using System;
 using System.Threading.Tasks;
-using CoreHRAPI.Data;
+using KYCAPI.Data;
 
-namespace CoreHRAPI.Handlers
+namespace KYCAPI.Handlers
 {
     public class RequestsHandler
     {

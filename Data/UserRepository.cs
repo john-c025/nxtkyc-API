@@ -3,11 +3,11 @@ using System;
 using System.Data;
 using System.Threading.Tasks;
 using Dapper;
-using CoreHRAPI.Models.Global;
-using CoreHRAPI.Models.User;
+using KYCAPI.Models.Global;
+using KYCAPI.Models.User;
 using Microsoft.Extensions.Logging;
 
-namespace CoreHRAPI.Data
+namespace KYCAPI.Data
 {
     public class UserRepository
     {

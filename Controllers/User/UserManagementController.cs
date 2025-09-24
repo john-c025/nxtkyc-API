@@ -2,25 +2,25 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 using System.Threading.Tasks;
-using CoreHRAPI.Data;
-using CoreHRAPI.Utilities;
-using CoreHRAPI.Models.User;
-using CoreHRAPI.Models.Configuration;
-using CoreHRAPI.Models.Global;
+using KYCAPI.Data;
+using KYCAPI.Utilities;
+using KYCAPI.Models.User;
+using KYCAPI.Models.Configuration;
+using KYCAPI.Models.Global;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 
-namespace CoreHRAPI.Controllers.Dashboard
+namespace KYCAPI.Controllers.Dashboard
 {
     [ApiController]
     [Route("api/v1/uam")]
         public class UserManagementController : ControllerBase
         {
-            private readonly ILogger<UserDetailsController> _logger;
+            private readonly ILogger<UserManagementController> _logger;
             private readonly UAMRepository _uamRepository;
             private readonly EmailService _emailService;
 
 
-            public UserManagementController(ILogger<UserDetailsController> logger, EmailService emailService, UAMRepository uamRepository)
+            public UserManagementController(ILogger<UserManagementController> logger, EmailService emailService, UAMRepository uamRepository)
             {
                 _logger = logger;
                 _uamRepository = uamRepository;

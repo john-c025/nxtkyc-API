@@ -1,13 +1,13 @@
-﻿using CoreHRAPI.Data;
-using CoreHRAPI.Models.Configuration;
+﻿using KYCAPI.Data;
+using KYCAPI.Models.Configuration;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
 using DotNetEnv;
 using Dapper;
-using Npgsql;
+using Microsoft.Data.SqlClient;
 using System.Data;
-using CoreHRAPI.Handlers;
+using KYCAPI.Handlers;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -28,21 +28,41 @@ builder.Services.AddHttpClient<GeminiHelper>();        // Register GeminiHelper 
 // Add services to the container.
 builder.Services.AddControllers();
 
-// Configure PostgreSQL connection string
-var connectionString = $"Host={Environment.GetEnvironmentVariable("DB_HOST")};" +
-                      $"Database={Environment.GetEnvironmentVariable("DB_NAME")};" +
-                      $"Username={Environment.GetEnvironmentVariable("DB_USER")};" +
-                      $"Password={Environment.GetEnvironmentVariable("DB_PASSWORD")};" +
-                      $"Maximum Pool Size=100;" +
-                      $"Timeout=30;" +
-                      $"Command Timeout=30;";
+// Configure SQL Server connection string
+var dbHost = Environment.GetEnvironmentVariable("DB_HOST");
+var dbName = Environment.GetEnvironmentVariable("DB_NAME");
+var useWindowsAuth = Environment.GetEnvironmentVariable("USE_WINDOWS_AUTH")?.ToLower() == "true";
 
-// Configure Dapper with PostgreSQL
-SqlMapper.AddTypeHandler(new PostgresTypeHandlers.JsonTypeHandler());
-SqlMapper.RemoveTypeMap(typeof(DateTime));
-SqlMapper.AddTypeHandler(new PostgresTypeHandlers.DateTimeHandler());
-SqlMapper.AddTypeHandler(new PostgresTypeHandlers.ArrayTypeHandler<int>());
-SqlMapper.AddTypeHandler(new PostgresTypeHandlers.ArrayTypeHandler<string>());
+string connectionString;
+if (useWindowsAuth)
+{
+    // Windows Authentication
+    connectionString = $"Server={dbHost};" +
+                      $"Database={dbName};" +
+                      $"Integrated Security=true;" +
+                      $"TrustServerCertificate=true;" +
+                      $"Connection Timeout=30;" +
+                      $"Max Pool Size=100;" +
+                      $"Encrypt=false;" +
+                      $"MultipleActiveResultSets=true;";
+}
+else
+{
+    // SQL Server Authentication
+    var dbPort = Environment.GetEnvironmentVariable("DB_PORT") ?? "1433";
+    connectionString = $"Server={dbHost},{dbPort};" +
+                      $"Database={dbName};" +
+                      $"User Id={Environment.GetEnvironmentVariable("DB_USER")};" +
+                      $"Password={Environment.GetEnvironmentVariable("DB_PASSWORD")};" +
+                      $"TrustServerCertificate=true;" +
+                      $"Connection Timeout=30;" +
+                      $"Max Pool Size=100;" +
+                      $"Encrypt=false;" +
+                      $"MultipleActiveResultSets=true;";
+}
+
+// Configure Dapper with SQL Server
+// SQL Server handles DateTime types natively, so no custom type handlers needed
 
 // Register the DatabaseContext with the environment-based connection string
 builder.Services.AddScoped<DatabaseContext>(provider =>
@@ -50,11 +70,10 @@ builder.Services.AddScoped<DatabaseContext>(provider =>
 
 // Register repositories
 builder.Services.AddScoped<UserRepository>();
-builder.Services.AddScoped<CIRSMasterListRepository>();
 builder.Services.AddScoped<UserCredentialsRepository>();
 builder.Services.AddScoped<GlobalRepository>();
-builder.Services.AddScoped<EmployeeRepository>();
 builder.Services.AddScoped<UAMRepository>();
+builder.Services.AddScoped<KYCRepository>();
 builder.Services.AddScoped<RequestsHandler>();
 
 // Register SMTP email service

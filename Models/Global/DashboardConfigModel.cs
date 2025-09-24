@@ -1,4 +1,4 @@
-﻿namespace CoreHRAPI.Models.Global
+﻿namespace KYCAPI.Models.Global
 {
     public class DashboardConfig
     {

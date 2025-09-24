@@ -3,10 +3,10 @@
 //using System.Data;
 //using System.Data.SqlClient;
 //using System.Threading.Tasks;
-//using CoreHRAPI.Data;
+//using KYCAPI.Data;
 //using Dapper;
 
-//namespace CoreHRAPI.Data
+//namespace KYCAPI.Data
 //{
 
 //    public class DatabaseContext : IDisposable
@@ -57,18 +57,18 @@
 using System;
 using System.Data;
 using System.Threading.Tasks;
-using Npgsql;
+using Microsoft.Data.SqlClient;
 using Dapper;
 
-namespace CoreHRAPI.Data
+namespace KYCAPI.Data
 {
     public class DatabaseContext : IDisposable
     {
-        private readonly NpgsqlConnection _connection;
+        private readonly SqlConnection _connection;
 
         public DatabaseContext(string connectionString)
         {
-            _connection = new NpgsqlConnection(connectionString);
+            _connection = new SqlConnection(connectionString);
         }
 
         public async Task OpenConnectionAsync()
@@ -86,9 +86,9 @@ namespace CoreHRAPI.Data
             }
         }
 
-        public NpgsqlConnection Connection => _connection;
+        public SqlConnection Connection => _connection;
 
-        public async Task<T> ExecuteDapperAsync<T>(Func<NpgsqlConnection, Task<T>> query)
+        public async Task<T> ExecuteDapperAsync<T>(Func<SqlConnection, Task<T>> query)
         {
             try
             {
@@ -101,7 +101,7 @@ namespace CoreHRAPI.Data
             }
         }
 
-        public async Task<T> ExecuteAdoAsync<T>(Func<NpgsqlConnection, Task<T>> query)
+        public async Task<T> ExecuteAdoAsync<T>(Func<SqlConnection, Task<T>> query)
         {
             try
             {
