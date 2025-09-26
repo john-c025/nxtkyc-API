@@ -309,7 +309,9 @@ namespace KYCAPI.Data
             {
                 await SetAuditUserIdAsync(connection, userId);
 
-                // Check if account already exists by company_id and account_origin_number
+                // If account_origin_number is provided, check if account already exists
+                if (!string.IsNullOrEmpty(upsertDto.account_origin_number))
+                {
                 var existingAccountQuery = @"
                     SELECT autoid, account_code, account_id, current_privilege_level
                     FROM client_accounts 
@@ -349,9 +351,9 @@ namespace KYCAPI.Data
                         IsNewAccount = false
                     };
                 }
-                else
-                {
-                    // Create new account
+                }
+
+                // Create new account (either no account_origin_number provided or no existing account found)
                     // Get company code for account code generation
                     var companyQuery = "SELECT company_code FROM client_companies WHERE company_id = @CompanyId";
                     var companyCode = await connection.QueryFirstOrDefaultAsync<string>(companyQuery, new { CompanyId = upsertDto.company_id });
@@ -362,6 +364,11 @@ namespace KYCAPI.Data
                     // Generate new account code and account ID using updated helper methods
                     var accountCode = KYCHelper.GenerateAccountCode(companyCode);
                     var accountId = KYCHelper.GenerateAccountId();
+
+                // Generate a default account_origin_number if not provided
+                var accountOriginNumber = !string.IsNullOrEmpty(upsertDto.account_origin_number) 
+                    ? upsertDto.account_origin_number 
+                    : $"WEB_{companyCode}_{DateTime.UtcNow:yyyyMMddHHmmss}";
 
                     var insertQuery = @"
                         INSERT INTO client_accounts (
@@ -379,7 +386,7 @@ namespace KYCAPI.Data
                     {
                         company_id = upsertDto.company_id,
                         account_code = accountCode,
-                        account_origin_number = upsertDto.account_origin_number,
+                    account_origin_number = accountOriginNumber,
                         account_id = accountId,
                         current_privilege_level = upsertDto.current_privilege_level,
                         created_by = userId,
@@ -393,7 +400,55 @@ namespace KYCAPI.Data
                         AccountId = accountId,
                         IsNewAccount = true
                     };
+            });
+        }
+
+        // Check if account exists and if account origin number is unique
+        public async Task<AccountCheckResult> CheckAccountAndOriginExistsAsync(string accountCode)
+        {
+            return await _dbContext.ExecuteDapperAsync(async connection =>
+            {
+                // First, get the account details if it exists
+                var accountQuery = @"
+                    SELECT company_id, account_origin_number
+                    FROM client_accounts 
+                    WHERE account_code = @AccountCode";
+
+                var account = await connection.QueryFirstOrDefaultAsync(accountQuery, new { AccountCode = accountCode });
+
+                if (account == null)
+                {
+                    return new AccountCheckResult
+                    {
+                        AccountExists = false,
+                        AccountOriginNumber = null,
+                        OriginNumberUnique = false,
+                        CompanyId = 0
+                    };
                 }
+
+                // Check if the account origin number is unique within the same company
+                var duplicateQuery = @"
+                    SELECT COUNT(1) 
+                    FROM client_accounts 
+                    WHERE company_id = @CompanyId 
+                    AND account_origin_number = @AccountOriginNumber
+                    AND account_code != @AccountCode";
+
+                var duplicateCount = await connection.QuerySingleAsync<int>(duplicateQuery, new
+                {
+                    CompanyId = account.company_id,
+                    AccountOriginNumber = account.account_origin_number,
+                    AccountCode = accountCode
+                });
+
+                return new AccountCheckResult
+                {
+                    AccountExists = true,
+                    AccountOriginNumber = account.account_origin_number,
+                    OriginNumberUnique = duplicateCount == 0,
+                    CompanyId = account.company_id
+                };
             });
         }
 

@@ -3,6 +3,7 @@ using KYCAPI.Data;
 using KYCAPI.Models.KYC;
 using KYCAPI.Models.Configuration;
 using System.ComponentModel.DataAnnotations;
+using System.Linq;
 
 namespace KYCAPI.Controllers.KYC
 {
@@ -318,6 +319,47 @@ namespace KYCAPI.Controllers.KYC
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error retrieving file categories");
+                return StatusCode(500, new APIResponse { Success = false, Message = "Internal server error" });
+            }
+        }
+
+        /// <summary>
+        /// Check if account exists and if account origin number is unique (Public endpoint - No auth required)
+        /// </summary>
+        [HttpGet("check-account")]
+        public async Task<IActionResult> CheckAccountExists([FromQuery] string account_code)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(account_code))
+                {
+                    return BadRequest(new APIResponse { Success = false, Message = "Account code is required" });
+                }
+
+                var result = await _kycRepository.CheckAccountAndOriginExistsAsync(account_code);
+
+                return Ok(new APIResponse
+                {
+                    Success = true,
+                    Message = result.AccountExists ? "Account exists" : "Account not found",
+                    Data = new
+                    {
+                        account_code = account_code,
+                        account_exists = result.AccountExists,
+                        account_origin_number = result.AccountOriginNumber,
+                        origin_number_unique = result.OriginNumberUnique,
+                        company_id = result.CompanyId,
+                        message = result.AccountExists 
+                            ? (result.OriginNumberUnique 
+                                ? "Account exists and origin number is unique" 
+                                : "Account exists but origin number has duplicates")
+                            : "Account not found"
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error checking account existence for account code: {AccountCode}", account_code);
                 return StatusCode(500, new APIResponse { Success = false, Message = "Internal server error" });
             }
         }

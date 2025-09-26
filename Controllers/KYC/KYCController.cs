@@ -6,6 +6,7 @@ using KYCAPI.Helpers;
 using System.ComponentModel.DataAnnotations;
 using Microsoft.AspNetCore.Authorization;
 using System.Security.Claims;
+using System.Linq;
 
 namespace KYCAPI.Controllers.KYC
 {
@@ -177,6 +178,27 @@ namespace KYCAPI.Controllers.KYC
         {
             try
             {
+                // Validate company_id
+                if (upsertDto.company_id <= 0)
+                {
+                    return BadRequest(new APIResponse { Success = false, Message = "Valid company_id is required" });
+                }
+
+                // Validate account_origin_number if provided
+                if (!string.IsNullOrEmpty(upsertDto.account_origin_number))
+                {
+                    if (upsertDto.account_origin_number.Length > 100)
+                    {
+                        return BadRequest(new APIResponse { Success = false, Message = "Account origin number cannot exceed 100 characters" });
+                    }
+                    
+                    // Check for invalid characters
+                    if (upsertDto.account_origin_number.Any(c => char.IsControl(c) || c == '\'' || c == '"' || c == ';'))
+                    {
+                        return BadRequest(new APIResponse { Success = false, Message = "Account origin number contains invalid characters" });
+                    }
+                }
+
                 var result = await _kycRepository.UpsertClientAccountAsync(upsertDto, "EXTERNAL_CLIENT");
 
                 return Ok(new APIResponse
@@ -187,9 +209,14 @@ namespace KYCAPI.Controllers.KYC
                         client_id = result.ClientId,
                         account_code = result.AccountCode,
                         account_id = result.AccountId,
-                        is_new_account = result.IsNewAccount
+                        is_new_account = result.IsNewAccount,
+                        account_origin_number = upsertDto.account_origin_number ?? "Auto-generated"
                     }
                 });
+            }
+            catch (ArgumentException ex)
+            {
+                return BadRequest(new APIResponse { Success = false, Message = ex.Message });
             }
             catch (Exception ex)
             {

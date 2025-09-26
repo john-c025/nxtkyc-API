@@ -379,8 +379,7 @@ namespace KYCAPI.Models.KYC
     // DTOs for Upsert Client Account
     public class UpsertClientAccountDto
     {
-        [Required]
-        public string account_origin_number { get; set; }
+        public string? account_origin_number { get; set; }
         
         [Required]
         public int company_id { get; set; }
@@ -423,5 +422,14 @@ namespace KYCAPI.Models.KYC
         
         [Required]
         public string account_code { get; set; }
+    }
+
+    // Account Check Result
+    public class AccountCheckResult
+    {
+        public bool AccountExists { get; set; }
+        public string? AccountOriginNumber { get; set; }
+        public bool OriginNumberUnique { get; set; }
+        public int CompanyId { get; set; }
     }
 }
