@@ -18,12 +18,14 @@ namespace KYCAPI.Controllers.KYC
         private readonly KYCRepository _kycRepository;
         private readonly ILogger<KYCController> _logger;
         private readonly IConfiguration _configuration;
+        private readonly EmailService _emailService;
 
-        public KYCController(KYCRepository kycRepository, ILogger<KYCController> logger, IConfiguration configuration)
+        public KYCController(KYCRepository kycRepository, ILogger<KYCController> logger, IConfiguration configuration, EmailService emailService)
         {
             _kycRepository = kycRepository;
             _logger = logger;
             _configuration = configuration;
+            _emailService = emailService;
         }
 
         // Helper method to get current user ID from JWT claims
@@ -550,9 +552,120 @@ namespace KYCAPI.Controllers.KYC
             }
         }
 
+        /// <summary>
+        /// Secure download (local file path; replace with signed URLs when using object storage)
+        /// </summary>
+        [HttpGet("files/{fileId}/download")]
+        public async Task<IActionResult> DownloadMediaFile(long fileId)
+        {
+            try
+            {
+                var currentUserId = GetCurrentUserId();
+
+                var file = await _kycRepository.GetKYCMediaFileByIdAsync(fileId);
+                if (file == null || string.IsNullOrWhiteSpace(file.file_path) || !System.IO.File.Exists(file.file_path))
+                {
+                    return NotFound(new APIResponse { Success = false, Message = "File not found" });
+                }
+
+                var contentType = file.mime_type ?? "application/octet-stream";
+                var fileBytes = await System.IO.File.ReadAllBytesAsync(file.file_path);
+                return File(fileBytes, contentType, file.file_original_name ?? file.file_name);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return Unauthorized(new APIResponse { Success = false, Message = "User not authenticated" });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error downloading media file: {FileId}", fileId);
+                return StatusCode(500, new APIResponse { Success = false, Message = "Internal server error" });
+            }
+        }
+
+        /// <summary>
+        /// Request client to reupload a document
+        /// </summary>
+        [HttpPost("files/{fileId}/request-reupload")]
+        public async Task<IActionResult> RequestReupload(long fileId, [FromBody] string? reason)
+        {
+            try
+            {
+                var currentUserId = GetCurrentUserId();
+
+                // Minimal approach: record a request in audit trail
+                var file = await _kycRepository.GetKYCMediaFileByIdAsync(fileId);
+                if (file == null)
+                {
+                    return NotFound(new APIResponse { Success = false, Message = "File not found" });
+                }
+
+                // Log audit as an action (4 = escalate or custom code)
+                await _kycRepository.CreateReuploadAuditAsync(file.kyc_request_id, currentUserId, reason);
+
+                return Ok(new APIResponse { Success = true, Message = "Reupload requested" });
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return Unauthorized(new APIResponse { Success = false, Message = "User not authenticated" });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error requesting reupload for file: {FileId}", fileId);
+                return StatusCode(500, new APIResponse { Success = false, Message = "Internal server error" });
+            }
+        }
+
+        /// <summary>
+        /// Send decision email to client for a request
+        /// </summary>
+        [HttpPost("requests/{kycRequestId}/send-decision-email")]
+        public async Task<IActionResult> SendDecisionEmail(string kycRequestId, [FromBody] DecisionEmailRequest request)
+        {
+            try
+            {
+                var currentUserId = GetCurrentUserId();
+
+                var details = await _kycRepository.GetKYCRequestDetailedAsync(kycRequestId);
+                if (details == null)
+                {
+                    return NotFound(new APIResponse { Success = false, Message = "KYC request not found" });
+                }
+
+                var email = details.client_email_address; // assuming detailed model includes client email
+                if (string.IsNullOrWhiteSpace(email))
+                {
+                    return BadRequest(new APIResponse { Success = false, Message = "Client email not available" });
+                }
+
+                var subject = request.subject ?? $"Your KYC request is {request.decision?.ToUpperInvariant() ?? "UPDATED"}";
+                var body = request.body ?? request.decision_reason ?? "Your KYC request has been updated.";
+
+                await _emailService.SendEmailAsync(email, request.subject ?? "KYC Decision", request.body ?? request.decision_reason ?? "");
+                return Ok(new APIResponse { Success = true, Message = "Decision email sent" });
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return Unauthorized(new APIResponse { Success = false, Message = "User not authenticated" });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error sending decision email for request: {KYCRequestId}", kycRequestId);
+                return StatusCode(500, new APIResponse { Success = false, Message = "Internal server error" });
+            }
+        }
+
         #endregion
 
         #region Dashboard and Analytics
+
+        public class DecisionEmailRequest
+        {
+            public string? decision { get; set; } // initial, approve, reject
+            public string? decision_reason { get; set; }
+            public string? subject { get; set; }
+            public string? body { get; set; }
+        }
 
         /// <summary>
         /// Get KYC dashboard summary statistics

@@ -78,6 +78,68 @@ namespace KYCAPI.Data
             }
         }
 
+        // Rate limiting for email requests (max 3 per hour per email)
+        public async Task<RateLimitResult> CheckEmailRateLimitAsync(string email)
+        {
+            return await _dbContext.ExecuteDapperAsync(async connection =>
+            {
+                var oneHourAgo = DateTime.UtcNow.AddHours(-1);
+                
+                var query = @"
+                    SELECT COUNT(1) as request_count
+                    FROM kyc_email_requests 
+                    WHERE email = @email 
+                    AND requested_at > @oneHourAgo";
+
+                var count = await connection.QuerySingleAsync<int>(query, new { email, oneHourAgo });
+                
+                if (count >= 3)
+                {
+                    // Get the oldest request in the last hour to calculate wait time
+                    var oldestQuery = @"
+                        SELECT TOP 1 requested_at
+                        FROM kyc_email_requests 
+                        WHERE email = @email 
+                        AND requested_at > @oneHourAgo
+                        ORDER BY requested_at ASC";
+                    
+                    var oldestRequest = await connection.QuerySingleOrDefaultAsync<DateTime?>(oldestQuery, new { email, oneHourAgo });
+                    
+                    var waitMinutes = oldestRequest.HasValue 
+                        ? Math.Max(0, 60 - (int)(DateTime.UtcNow - oldestRequest.Value).TotalMinutes)
+                        : 60;
+
+                    return new RateLimitResult { IsAllowed = false, WaitMinutes = waitMinutes };
+                }
+
+                return new RateLimitResult { IsAllowed = true, WaitMinutes = 0 };
+            });
+        }
+
+        // Log email request for rate limiting
+        public async Task LogEmailRequestAsync(string email, string accountCode)
+        {
+            await _dbContext.ExecuteDapperAsync(async connection =>
+            {
+                var query = @"
+                    INSERT INTO kyc_email_requests (email, account_code, requested_at)
+                    VALUES (@email, @accountCode, GETDATE())";
+
+                await connection.ExecuteAsync(query, new { email, accountCode });
+                return 0;
+            });
+        }
+
+        // Create reupload audit entry
+        public async Task CreateReuploadAuditAsync(string kycRequestId, string userId, string? reason)
+        {
+            await _dbContext.ExecuteDapperAsync(async connection =>
+            {
+                await LogKYCAuditTrailAsync(connection, kycRequestId, actionType: 5, actionBy: userId, oldStatus: null, newStatus: null, actionDetails: $"Reupload requested for a file. Reason: {reason ?? "No reason provided."}");
+                return 0;
+            });
+        }
+
         // Helper method to generate unique IDs
         private string GenerateUniqueId(string prefix, int length = 16)
         {
@@ -207,11 +269,11 @@ namespace KYCAPI.Data
                 var query = @"
                     INSERT INTO client_accounts (
                         company_id, account_code, account_origin_number, account_id,
-                        fname, mname, sname, account_status, current_privilege_level,
+                        fname, mname, sname, email_address, account_status, current_privilege_level,
                         account_metadata, is_active, created_at, updated_at, created_by, updated_by
                     ) VALUES (
                         @company_id, @account_code, @account_origin_number, @account_id,
-                        @fname, @mname, @sname, 1, 0,
+                        @fname, @mname, @sname, @email_address, 1, 0,
                         @account_metadata, 1, GETDATE(), GETDATE(), @created_by, @updated_by
                     );
                     SELECT CAST(SCOPE_IDENTITY() AS INT);";
@@ -373,11 +435,11 @@ namespace KYCAPI.Data
                     var insertQuery = @"
                         INSERT INTO client_accounts (
                             company_id, account_code, account_origin_number, account_id,
-                            fname, mname, sname, account_status, current_privilege_level,
+                            fname, mname, sname, email_address, account_status, current_privilege_level,
                             account_metadata, is_active, created_at, updated_at, created_by, updated_by
                         ) VALUES (
                             @company_id, @account_code, @account_origin_number, @account_id,
-                            '', '', '', 1, @current_privilege_level,
+                            '', '', '', NULL, 1, @current_privilege_level,
                             '', 1, GETDATE(), GETDATE(), @created_by, @updated_by
                         );
                         SELECT CAST(SCOPE_IDENTITY() AS INT);";
@@ -550,6 +612,101 @@ namespace KYCAPI.Data
             });
         }
 
+        // Revoke token by expiring it immediately (non-destructive)
+        public async Task<bool> RevokeAccessTokenAsync(string token, string accountCode)
+        {
+            return await _dbContext.ExecuteDapperAsync(async connection =>
+            {
+                var tokenHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
+
+                var query = @"
+                    UPDATE kyc_access_tokens
+                    SET expires_at = GETDATE()
+                    WHERE account_code = @account_code
+                      AND token_hash = @token_hash
+                      AND is_used = 0
+                      AND expires_at > GETDATE()";
+
+                var rows = await connection.ExecuteAsync(query, new { account_code = accountCode, token_hash = tokenHash });
+                return rows > 0;
+            });
+        }
+
+        // Introspect token validity regardless of state
+        public async Task<TokenValidationResult?> IntrospectTokenAsync(string token, string accountCode)
+        {
+            return await _dbContext.ExecuteDapperAsync(async connection =>
+            {
+                var tokenHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
+
+                var query = @"
+                    SELECT TOP 1 account_code, expires_at, is_used
+                    FROM kyc_access_tokens
+                    WHERE account_code = @account_code AND token_hash = @token_hash
+                    ORDER BY created_at DESC";
+
+                var row = await connection.QueryFirstOrDefaultAsync(query, new { account_code = accountCode, token_hash = tokenHash });
+                if (row == null)
+                    return null;
+
+                bool isValid = (row.is_used == 0) && (row.expires_at > DateTime.UtcNow);
+                return new TokenValidationResult
+                {
+                    IsValid = isValid,
+                    AccountCode = row.account_code,
+                    ExpiresAt = row.expires_at
+                };
+            });
+        }
+
+        // Get public-safe audit trail entries
+        public async Task<IEnumerable<object>> GetPublicAuditTrailAsync(string kycRequestId)
+        {
+            return await _dbContext.ExecuteDapperAsync(async connection =>
+            {
+                var query = @"
+                    SELECT action_type, action_timestamp, new_status, old_status
+                    FROM kyc_audit_trail
+                    WHERE kyc_request_id = @kyc_request_id
+                    ORDER BY action_timestamp DESC";
+
+                var items = await connection.QueryAsync(query, new { kyc_request_id = kycRequestId });
+                // Project to public-safe shape
+                return items.Select(x => new
+                {
+                    action_type = (byte)x.action_type,
+                    action_timestamp = (DateTime)x.action_timestamp,
+                    old_status = (byte?)x.old_status,
+                    new_status = (byte?)x.new_status
+                });
+            });
+        }
+
+        // Get last token created time for resend cooldown checks
+        public async Task<DateTime?> GetLastTokenCreatedAtAsync(string accountCode)
+        {
+            return await _dbContext.ExecuteDapperAsync(async connection =>
+            {
+                var query = @"
+                    SELECT TOP 1 created_at
+                    FROM kyc_access_tokens
+                    WHERE account_code = @account_code
+                    ORDER BY created_at DESC";
+                var dt = await connection.ExecuteScalarAsync<DateTime?>(query, new { account_code = accountCode });
+                return dt;
+            });
+        }
+
+        // Retrieve a single media file by id
+        public async Task<KYCMediaFileModel?> GetKYCMediaFileByIdAsync(long fileId)
+        {
+            return await _dbContext.ExecuteDapperAsync(async connection =>
+            {
+                var query = @"SELECT * FROM kyc_media_files WHERE autoid = @fileId";
+                return await connection.QueryFirstOrDefaultAsync<KYCMediaFileModel>(query, new { fileId });
+            });
+        }
+
         // KYC Requests Methods
         public async Task<string> CreateKYCRequestAsync(CreateKYCRequestDto requestDto, string userId)
         {
@@ -653,7 +810,7 @@ namespace KYCAPI.Data
                 // Get main request details
                 var requestQuery = @"
                     SELECT kr.*, CONCAT(ca.fname, ' ', ca.mname, ' ', ca.sname) as client_full_name,
-                           cc.company_name
+                           cc.company_name, ca.email_address as client_email_address
                     FROM kyc_requests kr
                     LEFT JOIN client_accounts ca ON kr.client_account_id = ca.autoid
                     LEFT JOIN client_companies cc ON kr.company_id = cc.company_id

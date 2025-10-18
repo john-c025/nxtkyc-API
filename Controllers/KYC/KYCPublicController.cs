@@ -14,12 +14,80 @@ namespace KYCAPI.Controllers.KYC
         private readonly KYCRepository _kycRepository;
         private readonly ILogger<KYCPublicController> _logger;
         private readonly IConfiguration _configuration;
+        private readonly EmailService _emailService;
 
-        public KYCPublicController(KYCRepository kycRepository, ILogger<KYCPublicController> logger, IConfiguration configuration)
+        public KYCPublicController(KYCRepository kycRepository, ILogger<KYCPublicController> logger, IConfiguration configuration, EmailService emailService)
         {
             _kycRepository = kycRepository;
             _logger = logger;
             _configuration = configuration;
+            _emailService = emailService;
+        }
+
+        /// <summary>
+        /// Revoke an access token (client self-serve: "I didn't request this")
+        /// </summary>
+        [HttpPost("tokens/revoke")]
+        public async Task<IActionResult> RevokeAccessToken([FromBody] ValidateTokenDto request)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(request?.token) || string.IsNullOrWhiteSpace(request?.account_code))
+                {
+                    return BadRequest(new APIResponse { Success = false, Message = "Token and account_code are required" });
+                }
+
+                var revoked = await _kycRepository.RevokeAccessTokenAsync(request.token, request.account_code);
+                if (!revoked)
+                {
+                    return Ok(new APIResponse { Success = true, Message = "Token already invalid or not found", Data = new { revoked = false } });
+                }
+
+                return Ok(new APIResponse { Success = true, Message = "Token revoked", Data = new { revoked = true } });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error revoking token for account: {AccountCode}", request?.account_code);
+                return StatusCode(500, new APIResponse { Success = false, Message = "Internal server error" });
+            }
+        }
+
+        /// <summary>
+        /// Introspect a token (validity, expiry)
+        /// </summary>
+        [HttpGet("tokens/introspect")]
+        public async Task<IActionResult> IntrospectToken([FromQuery] string token, [FromQuery] string account_code)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(token) || string.IsNullOrWhiteSpace(account_code))
+                {
+                    return BadRequest(new APIResponse { Success = false, Message = "Token and account_code are required" });
+                }
+
+                var result = await _kycRepository.IntrospectTokenAsync(token, account_code);
+                if (result == null)
+                {
+                    return Ok(new APIResponse { Success = true, Message = "Token invalid", Data = new { is_valid = false } });
+                }
+
+                return Ok(new APIResponse
+                {
+                    Success = true,
+                    Message = "Token introspection",
+                    Data = new
+                    {
+                        is_valid = result.IsValid,
+                        expires_at = result.ExpiresAt,
+                        reason = result.IsValid ? null : "invalid_or_expired"
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error introspecting token for account: {AccountCode}", account_code);
+                return StatusCode(500, new APIResponse { Success = false, Message = "Internal server error" });
+            }
         }
 
         /// <summary>
@@ -138,6 +206,187 @@ namespace KYCAPI.Controllers.KYC
                 _logger.LogError(ex, "Error submitting public KYC request");
                 return StatusCode(500, new APIResponse { Success = false, Message = "Internal server error while processing your request" });
             }
+        }
+
+        /// <summary>
+        /// Send KYC link to client's email (with email verification and rate limiting)
+        /// </summary>
+        [HttpPost("tokens/send-email")]
+        public async Task<IActionResult> SendKycLink([FromBody] SendKycLinkRequest request)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(request?.account_code) || string.IsNullOrWhiteSpace(request?.email))
+                {
+                    return BadRequest(new APIResponse { Success = false, Message = "account_code and email are required" });
+                }
+
+                // Validate email format
+                if (!IsValidEmail(request.email))
+                {
+                    return BadRequest(new APIResponse { Success = false, Message = "Invalid email format" });
+                }
+
+                // Check rate limiting (max 3 requests per email per hour)
+                var rateLimitCheck = await _kycRepository.CheckEmailRateLimitAsync(request.email);
+                if (!rateLimitCheck.IsAllowed)
+                {
+                    var waitMinutes = rateLimitCheck.WaitMinutes;
+                    return Ok(new APIResponse 
+                    { 
+                        Success = true, 
+                        Message = $"Rate limit exceeded. Please wait {waitMinutes} minute(s) before requesting another KYC link.",
+                        Data = new { rate_limited = true, wait_minutes = waitMinutes }
+                    });
+                }
+
+                // Verify account exists and get account details
+                var account = await _kycRepository.GetClientAccountByCodeAsync(request.account_code);
+                if (account == null)
+                {
+                    return BadRequest(new APIResponse { Success = false, Message = "Account not found" });
+                }
+
+                // Verify email matches account (if email is stored)
+                if (!string.IsNullOrWhiteSpace(account.email_address) && 
+                    !string.Equals(account.email_address, request.email, StringComparison.OrdinalIgnoreCase))
+                {
+                    return BadRequest(new APIResponse { Success = false, Message = "Email does not match the account. Please use the email associated with this account." });
+                }
+
+                // Generate token (default validity 24h if not supplied)
+                var token = await _kycRepository.GenerateAccessTokenAsync(new GenerateAccessTokenDto
+                {
+                    account_code = request.account_code,
+                    hours_valid = request.hours_valid > 0 ? request.hours_valid : 24
+                });
+
+                // Compose link
+                var baseUrl = _configuration["PublicKycBaseUrl"] ?? "https://example.com/kyc";
+                var link = $"{baseUrl}?token={Uri.EscapeDataString(token)}&account={Uri.EscapeDataString(request.account_code)}";
+
+                var subject = request.subject ?? "Complete your KYC verification";
+                var body = request.body ?? $"Hello {account.full_name},\n\nClick the link below to complete your KYC verification:\n\n{link}\n\nThis link will expire in {request.hours_valid} hours.\n\nIf you did not request this, please ignore this email.";
+                
+                await _emailService.SendEmailAsync(request.email, subject, body);
+
+                // Log the email request for rate limiting
+                await _kycRepository.LogEmailRequestAsync(request.email, request.account_code);
+
+                return Ok(new APIResponse 
+                { 
+                    Success = true, 
+                    Message = "KYC verification link sent to your email",
+                    Data = new { email_sent = true, expires_in_hours = request.hours_valid }
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error sending KYC link email for account: {AccountCode}", request?.account_code);
+                return StatusCode(500, new APIResponse { Success = false, Message = "Internal server error" });
+            }
+        }
+
+        /// <summary>
+        /// Resend KYC link with cooldown
+        /// </summary>
+        [HttpPost("tokens/resend")]
+        public async Task<IActionResult> ResendKycLink([FromBody] SendKycLinkRequest request)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(request?.account_code) || string.IsNullOrWhiteSpace(request?.email))
+                {
+                    return BadRequest(new APIResponse { Success = false, Message = "account_code and email are required" });
+                }
+
+                var lastCreatedAt = await _kycRepository.GetLastTokenCreatedAtAsync(request.account_code);
+                var cooldownMinutes = request.cooldown_minutes > 0 ? request.cooldown_minutes : 5;
+                if (lastCreatedAt.HasValue && (DateTime.UtcNow - lastCreatedAt.Value.ToUniversalTime()).TotalMinutes < cooldownMinutes)
+                {
+                    var wait = cooldownMinutes - (int)Math.Floor((DateTime.UtcNow - lastCreatedAt.Value.ToUniversalTime()).TotalMinutes);
+                    return Ok(new APIResponse { Success = true, Message = $"Please wait {wait} minute(s) before resending" });
+                }
+
+                // Generate new token
+                var token = await _kycRepository.GenerateAccessTokenAsync(new GenerateAccessTokenDto
+                {
+                    account_code = request.account_code,
+                    hours_valid = request.hours_valid > 0 ? request.hours_valid : 24
+                });
+
+                var baseUrl = _configuration["PublicKycBaseUrl"] ?? "https://example.com/kyc";
+                var link = $"{baseUrl}?token={Uri.EscapeDataString(token)}&account={Uri.EscapeDataString(request.account_code)}";
+
+                var subject = request.subject ?? "Complete your KYC";
+                var body = request.body ?? $"Click the link to complete your KYC: {link}";
+                await _emailService.SendEmailAsync(request.email, subject, body);
+
+                return Ok(new APIResponse { Success = true, Message = "KYC link resent" });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error resending KYC link email for account: {AccountCode}", request?.account_code);
+                return StatusCode(500, new APIResponse { Success = false, Message = "Internal server error" });
+            }
+        }
+        /// <summary>
+        /// Public timeline/events for a single KYC request
+        /// </summary>
+        [HttpGet("requests/{kycRequestId}/timeline")]
+        public async Task<IActionResult> GetPublicTimeline(string kycRequestId)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(kycRequestId))
+                {
+                    return BadRequest(new APIResponse { Success = false, Message = "kycRequestId is required" });
+                }
+
+                var eventsList = await _kycRepository.GetPublicAuditTrailAsync(kycRequestId);
+                return Ok(new APIResponse
+                {
+                    Success = true,
+                    Message = "Timeline retrieved",
+                    Data = eventsList
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error retrieving public timeline for request: {KYCRequestId}", kycRequestId);
+                return StatusCode(500, new APIResponse { Success = false, Message = "Internal server error" });
+            }
+        }
+
+        /// <summary>
+        /// Create upload session (placeholder for pre-signed URL workflows)
+        /// </summary>
+        [HttpPost("upload/create-session")]
+        public IActionResult CreateUploadSession([FromBody] object? payload)
+        {
+            // Minimal placeholder response; full implementation requires object storage integration
+            var uploadSessionId = Guid.NewGuid().ToString("N");
+            return Ok(new APIResponse
+            {
+                Success = true,
+                Message = "Upload session created",
+                Data = new
+                {
+                    upload_session_id = uploadSessionId,
+                    max_file_size_mb = 10,
+                    allowed_mime = new[] { "application/pdf", "image/jpeg", "image/png", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/msword" },
+                    urls = Array.Empty<object>()
+                }
+            });
+        }
+
+        /// <summary>
+        /// Complete upload session (placeholder verification)
+        /// </summary>
+        [HttpPost("upload/complete-session")]
+        public IActionResult CompleteUploadSession([FromBody] object? payload)
+        {
+            return Ok(new APIResponse { Success = true, Message = "Upload session completed", Data = new { verified = true } });
         }
 
         /// <summary>
@@ -431,6 +680,19 @@ namespace KYCAPI.Controllers.KYC
             };
         }
 
+        private bool IsValidEmail(string email)
+        {
+            try
+            {
+                var addr = new System.Net.Mail.MailAddress(email);
+                return addr.Address == email;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         private List<string> GetServicesFromJson(string? privilegesJson)
         {
             if (string.IsNullOrEmpty(privilegesJson))
@@ -534,5 +796,17 @@ namespace KYCAPI.Controllers.KYC
         
         [Required]
         public string account_code { get; set; }
+    }
+
+    public class SendKycLinkRequest
+    {
+        [Required]
+        public string email { get; set; }
+        [Required]
+        public string account_code { get; set; }
+        public int hours_valid { get; set; } = 24;
+        public int cooldown_minutes { get; set; } = 5;
+        public string? subject { get; set; }
+        public string? body { get; set; }
     }
 }

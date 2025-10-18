@@ -39,6 +39,7 @@ namespace KYCAPI.Models.KYC
         public string mname { get; set; }
         [Required]
         public string sname { get; set; }
+        public string? email_address { get; set; }
         public byte account_status { get; set; } = 1;
         public byte current_privilege_level { get; set; } = 0;
         public string? account_metadata { get; set; }
@@ -371,6 +372,7 @@ namespace KYCAPI.Models.KYC
     {
         public string client_full_name { get; set; }
         public string company_name { get; set; }
+        public string? client_email_address { get; set; }
         public List<KYCMediaFileModel> attached_files { get; set; } = new();
         public List<KYCApprovalActionModel> approval_actions { get; set; } = new();
         public List<KYCAuditTrailModel> audit_trail { get; set; } = new();
@@ -431,5 +433,12 @@ namespace KYCAPI.Models.KYC
         public string? AccountOriginNumber { get; set; }
         public bool OriginNumberUnique { get; set; }
         public int CompanyId { get; set; }
+    }
+
+    // Rate Limiting Model
+    public class RateLimitResult
+    {
+        public bool IsAllowed { get; set; }
+        public int WaitMinutes { get; set; }
     }
 }
